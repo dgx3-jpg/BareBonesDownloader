@@ -10,6 +10,12 @@ namespace BareBonesDownloader
     internal sealed class AppSettings
     {
         [DataMember(Name = "destination", EmitDefaultValue = false)] public string Destination { get; set; }
+        [DataMember(Name = "videoDestination", EmitDefaultValue = false)] public string VideoDestination { get; set; }
+        [DataMember(Name = "theme", EmitDefaultValue = false)] public string Theme { get; set; }
+        [DataMember(Name = "audioMaxSizeMb", EmitDefaultValue = false)] public int AudioMaxSizeMb { get; set; }
+        [DataMember(Name = "videoMaxSizeMb", EmitDefaultValue = false)] public int VideoMaxSizeMb { get; set; }
+        [DataMember(Name = "videoMaxHeight", EmitDefaultValue = false)] public int VideoMaxHeight { get; set; }
+        [DataMember(Name = "appendYouTubeUrlToFilename", EmitDefaultValue = false)] public bool AppendYouTubeUrlToFilename { get; set; }
         [DataMember(Name = "audioFormat", EmitDefaultValue = false)] public string AudioFormat { get; set; }
         [DataMember(Name = "qualityMode", EmitDefaultValue = false)] public string QualityMode { get; set; }
         [DataMember(Name = "variableQuality", EmitDefaultValue = false)] public int VariableQuality { get; set; }
@@ -30,11 +36,12 @@ namespace BareBonesDownloader
         public static AppSettings Defaults()
         {
             return new AppSettings {
-                AudioFormat = "best", QualityMode = "default", VariableQuality = 5,
+                Theme = "light", AudioFormat = "best", QualityMode = "default", VariableQuality = 5,
                 BitrateKbps = 192, TagTitle = true, TagArtist = true, TagAlbum = true,
                 TagAlbumArtist = true, TagDate = true, TagTrack = true, TagDisc = true,
                 TagGenre = true, TagComposer = true, TagSourceUrl = true,
-                TagDescription = true, ReplayGain = true
+                TagDescription = true, ReplayGain = true,
+                AudioMaxSizeMb = 0, VideoMaxSizeMb = 0, VideoMaxHeight = 0, AppendYouTubeUrlToFilename = false
             };
         }
 
@@ -45,10 +52,16 @@ namespace BareBonesDownloader
 
         public void Normalize()
         {
+            if (Theme != "light" && Theme != "dark") Theme = "light";
             if (String.IsNullOrEmpty(AudioFormat) || !AudioFormats.IsKnown(AudioFormat)) AudioFormat = "best";
             if (QualityMode != "default" && QualityMode != "variable" && QualityMode != "bitrate") QualityMode = "default";
             if (VariableQuality < 0 || VariableQuality > 10) VariableQuality = 5;
             if (BitrateKbps < 32 || BitrateKbps > 512) BitrateKbps = 192;
+            if (AudioMaxSizeMb < 0 || AudioMaxSizeMb > 16384) AudioMaxSizeMb = 0;
+            if (VideoMaxSizeMb < 0 || VideoMaxSizeMb > 16384) VideoMaxSizeMb = 0;
+            if (VideoMaxHeight != 0 && VideoMaxHeight != 360 && VideoMaxHeight != 480 &&
+                VideoMaxHeight != 720 && VideoMaxHeight != 1080 && VideoMaxHeight != 1440 &&
+                VideoMaxHeight != 2160) VideoMaxHeight = 0;
             AudioFormatOption format = AudioFormats.Find(AudioFormat);
             if (format == null || format.Id == "best" ||
                 (QualityMode == "variable" && !format.HasQuality) ||
@@ -70,7 +83,12 @@ namespace BareBonesDownloader
         public static AppSettings Load(out string problem)
         {
             problem = null;
-            string path = SettingsPath;
+            return LoadFromPath(SettingsPath, out problem);
+        }
+
+        public static AppSettings LoadFromPath(string path, out string problem)
+        {
+            problem = null;
             AppSettings settings = AppSettings.Defaults();
             if (!File.Exists(path)) return settings;
             try
@@ -81,6 +99,10 @@ namespace BareBonesDownloader
                 if (settings == null) settings = AppSettings.Defaults();
                 AppSettings defaults = AppSettings.Defaults();
                 if (!Has(json, "audioFormat")) settings.AudioFormat = defaults.AudioFormat;
+                if (!Has(json, "audioMaxSizeMb")) settings.AudioMaxSizeMb = defaults.AudioMaxSizeMb;
+                if (!Has(json, "videoMaxSizeMb")) settings.VideoMaxSizeMb = defaults.VideoMaxSizeMb;
+                if (!Has(json, "videoMaxHeight")) settings.VideoMaxHeight = defaults.VideoMaxHeight;
+                if (!Has(json, "appendYouTubeUrlToFilename")) settings.AppendYouTubeUrlToFilename = defaults.AppendYouTubeUrlToFilename;
                 if (!Has(json, "qualityMode")) settings.QualityMode = defaults.QualityMode;
                 if (!Has(json, "variableQuality")) settings.VariableQuality = defaults.VariableQuality;
                 if (!Has(json, "bitrateKbps")) settings.BitrateKbps = defaults.BitrateKbps;
@@ -113,12 +135,19 @@ namespace BareBonesDownloader
 
         public static void Save(AppSettings settings)
         {
+            SaveToPath(settings, SettingsPath);
+        }
+
+        public static void SaveToPath(AppSettings settings, string filePath)
+        {
             if (settings == null) throw new ArgumentNullException("settings");
             settings.Normalize();
             if (!String.IsNullOrWhiteSpace(settings.Destination) && !Path.IsPathRooted(settings.Destination))
                 throw new ArgumentException("The destination must be a full path.", "settings");
+            if (!String.IsNullOrWhiteSpace(settings.VideoDestination) && !Path.IsPathRooted(settings.VideoDestination))
+                throw new ArgumentException("The video destination must be a full path.", "settings");
             if (!String.IsNullOrWhiteSpace(settings.Destination)) settings.Destination = Path.GetFullPath(settings.Destination);
-            string filePath = SettingsPath;
+            if (!String.IsNullOrWhiteSpace(settings.VideoDestination)) settings.VideoDestination = Path.GetFullPath(settings.VideoDestination);
             Directory.CreateDirectory(Path.GetDirectoryName(filePath));
             string temporaryPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try

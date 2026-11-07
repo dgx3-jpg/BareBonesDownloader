@@ -5,8 +5,8 @@ namespace BareBonesDownloader
 {
     internal static class DownloadFiles
     {
-        // Publish only completed audio, without changing any file already in Music.
-        public static string PublishAudio(string source, string destination,
+        // Publish only a completed file without changing an existing destination file.
+        public static string PublishCompletedFile(string source, string destination,
             Func<bool> shouldStop, out bool existingFile)
         {
             string target = Path.Combine(Path.GetFullPath(destination), Path.GetFileName(source));
@@ -55,6 +55,33 @@ namespace BareBonesDownloader
                 if (File.Exists(temporary))
                     File.Delete(temporary);
             }
+        }
+
+        public static string PublishAudio(string source, string destination,
+            Func<bool> shouldStop, out bool existingFile)
+        {
+            return PublishCompletedFile(source, destination, shouldStop, out existingFile);
+        }
+
+        public static bool IsSafePathWithin(string directory, string path)
+        {
+            string root = Path.GetFullPath(directory).TrimEnd(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            string fullPath = Path.GetFullPath(path);
+            string rootDirectory = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (Directory.Exists(rootDirectory) &&
+                (File.GetAttributes(rootDirectory) & FileAttributes.ReparsePoint) != 0) return false;
+            if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
+            string current = rootDirectory;
+            string relative = fullPath.Substring(root.Length);
+            string[] parts = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            foreach (string part in parts)
+            {
+                current = Path.Combine(current, part);
+                if ((File.Exists(current) || Directory.Exists(current)) &&
+                    (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) return false;
+            }
+            return true;
         }
 
         public static void CleanupWorkingDirectory(string workRoot, string workingDirectory)

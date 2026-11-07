@@ -28,9 +28,14 @@ namespace BareBonesDownloader
                 }
                 string basePath = AppDomain.CurrentDomain.BaseDirectory;
                 string destination = Path.Combine(basePath, "音楽-music-test-" + Guid.NewGuid().ToString("N"));
+                string videoDestination = Path.Combine(basePath, "動画-video-test-" + Guid.NewGuid().ToString("N"));
                 Directory.CreateDirectory(destination);
+                Directory.CreateDirectory(videoDestination);
+                CheckSettings(basePath, destination, videoDestination);
+                CheckAppearanceSettings(basePath);
+                CheckVideoOutput(basePath);
                 CheckPublishing(destination);
-                CheckQueue(destination);
+                CheckQueue(destination, videoDestination);
                 Console.WriteLine("PASS: " + _passed + " regression checks");
                 return 0;
             }
@@ -39,6 +44,73 @@ namespace BareBonesDownloader
                 Console.Error.WriteLine(ex);
                 return 1;
             }
+        }
+
+        private static void CheckSettings(string basePath, string destination, string videoDestination)
+        {
+            string path = Path.Combine(basePath, "settings-regression", "settings.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(path, "{\"destination\":\"" + destination.Replace("\\", "\\\\") +
+                "\",\"audioFormat\":\"mp3\",\"qualityMode\":\"bitrate\",\"bitrateKbps\":256,\"tagTitle\":false,\"replayGain\":false}");
+            string problem;
+            AppSettings legacy = SettingsStore.LoadFromPath(path, out problem);
+            Assert(problem == null && legacy.Destination == destination && legacy.VideoDestination == null && legacy.Theme == "light",
+                "legacy settings retain the audio folder and default new options");
+            Assert(legacy.AudioFormat == "mp3" && legacy.QualityMode == "bitrate" && legacy.BitrateKbps == 256 &&
+                !legacy.TagTitle && !legacy.ReplayGain, "legacy audio options remain intact");
+            legacy.VideoDestination = videoDestination;
+            legacy.Theme = "dark";
+            SettingsStore.SaveToPath(legacy, path);
+            AppSettings current = SettingsStore.LoadFromPath(path, out problem);
+            Assert(problem == null && current.Destination == destination && current.VideoDestination == videoDestination &&
+                current.Theme == "dark", "video folder and appearance save and load");
+            File.WriteAllText(path, "{not valid json}");
+            current = SettingsStore.LoadFromPath(path, out problem);
+            Assert(problem != null && current.Theme == "light", "corrupt settings recover with the Light theme");
+            Directory.Delete(Path.GetDirectoryName(path), true);
+        }
+
+        private static void CheckVideoOutput(string basePath)
+        {
+            string tools = Path.Combine(basePath, "tools");
+            string folder = Path.Combine(basePath, "video-probe-test");
+            Directory.CreateDirectory(folder);
+            using (ProcessJob job = new ProcessJob())
+            {
+                string valid = Path.Combine(folder, "Valid [BBBBBBBBBBB].mp4");
+                File.WriteAllText(valid, "synthetic video");
+                VideoOutput.Validate(valid, Path.Combine(tools, "ffprobe.exe"), job, delegate { return false; });
+                Assert(true, "video validation accepts H.264 video with AAC audio");
+                foreach (string invalidName in new string[]
+                    { "Video missing audio [MMMMMMMMMMM].mp4", "Video attached picture [NNNNNNNNNNN].mp4", "Video wrong codec [OOOOOOOOOOO].mp4" })
+                {
+                    string invalid = Path.Combine(folder, invalidName);
+                    File.WriteAllText(invalid, "synthetic video");
+                    bool rejected = false;
+                    try { VideoOutput.Validate(invalid, Path.Combine(tools, "ffprobe.exe"), job, delegate { return false; }); }
+                    catch (IOException) { rejected = true; }
+                    Assert(rejected, "video validation rejects " + Path.GetFileNameWithoutExtension(invalid));
+                }
+            }
+            Directory.Delete(folder, true);
+        }
+
+        private static void CheckAppearanceSettings(string basePath)
+        {
+            string path = Path.Combine(basePath, "appearance-regression", "settings.json");
+            AppSettings settings = AppSettings.Defaults();
+            settings.Destination = null;
+            settings.VideoDestination = null;
+            using (SettingsForm form = new SettingsForm(settings, path))
+            {
+                ComboBox theme = (ComboBox)Get(form, "_theme");
+                theme.SelectedIndex = 1;
+                Invoke(form, "SaveSettings");
+                Assert(form.Result != null && form.Result.Theme == "dark" && form.Result.Destination == null &&
+                    form.Result.VideoDestination == null, "appearance can be saved before choosing folders");
+                Assert(File.Exists(path), "appearance settings use the isolated settings file");
+            }
+            Directory.Delete(Path.GetDirectoryName(path), true);
         }
 
         private static void CheckPublishing(string destination)
@@ -79,11 +151,15 @@ namespace BareBonesDownloader
             Assert(refused && Directory.Exists(destination), "cleanup refuses paths outside its working folder");
         }
 
-        private static void CheckQueue(string destination)
+        private static void CheckQueue(string destination, string videoDestination)
         {
             using (DownloaderForm form = new DownloaderForm())
             {
                 IntPtr handle = form.Handle;
+                AppSettings settings = AppSettings.Defaults();
+                settings.Destination = destination;
+                settings.VideoDestination = videoDestination;
+                Set(form, "_settings", settings);
                 Set(form, "_destinationPath", destination);
                 try
                 {
@@ -141,6 +217,41 @@ namespace BareBonesDownloader
                     Assert(updatedLog.Contains("Metadata warning:") && updatedLog.Contains("date"), "metadata warnings identify the field without failing the download");
                     Assert(!File.Exists(Path.Combine(destination, "Broken audio.opus")), "a file without a readable audio stream is rejected");
                     Assert(Status(form, 9) == "Finished", "the queue continues through metadata warnings and invalid audio");
+
+                    AddKind(form, "https://youtu.be/BBBBBBBBBBB", DownloadKind.Video);
+                    WaitFor(form, delegate { return Rows(form).Items.Count == 11 && Status(form, 10) == "Finished"; });
+                    Assert(Rows(form).Items[10].SubItems[1].Text == "Video + audio", "queue shows the video mode beside its status");
+                    Assert(File.Exists(Path.Combine(videoDestination, "Video Regression [BBBBBBBBBBB].mp4")),
+                        "video publishes a validated MP4 to its own destination");
+                    Assert(!File.Exists(Path.Combine(videoDestination, "Video Regression [BBBBBBBBBBB].info.json")),
+                        "video downloads skip audio metadata files");
+
+                    AddKind(form, "https://youtu.be/BBBBBBBBBBB", DownloadKind.Audio);
+                    AddKind(form, "https://youtu.be/BBBBBBBBBBB", DownloadKind.Video);
+                    WaitFor(form, delegate { return Rows(form).Items.Count == 13 && Status(form, 11) == "Finished" && Status(form, 12) == "Finished"; });
+                    Assert(Rows(form).Items[11].SubItems[1].Text == "Audio only" &&
+                        Rows(form).Items[12].SubItems[1].Text == "Video + audio",
+                        "the same YouTube ID can be queued for both download types");
+
+                    AddKind(form, "https://youtu.be/MMMMMMMMMMM\r\nhttps://youtu.be/NNNNNNNNNNN\r\nhttps://youtu.be/OOOOOOOOOOO",
+                        DownloadKind.Video);
+                    WaitFor(form, delegate { return Rows(form).Items.Count == 16 && Status(form, 13) == "Failed" &&
+                        Status(form, 14) == "Failed" && Status(form, 15) == "Failed"; });
+                    Assert(!File.Exists(Path.Combine(videoDestination, "Video missing audio [MMMMMMMMMMM].mp4")),
+                        "video without an audio stream is never published");
+                    Assert(!File.Exists(Path.Combine(videoDestination, "Video attached picture [NNNNNNNNNNN].mp4")),
+                        "cover artwork does not count as a video stream");
+                    Assert(!File.Exists(Path.Combine(videoDestination, "Video wrong codec [OOOOOOOOOOO].mp4")),
+                        "video with unsupported codecs is never published");
+
+                    AddKind(form, "https://youtu.be/CCCCCCCCCCC", DownloadKind.Video);
+                    string videoPartial = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "work", "video-4343434343434343434343",
+                        "Video cancelled [CCCCCCCCCCC].part");
+                    WaitFor(form, delegate { return Directory.Exists(Path.GetDirectoryName(videoPartial)); });
+                    Invoke(form, "OnCancelCurrent");
+                    WaitFor(form, delegate { return Status(form, 16) == "Cancelled"; });
+                    Assert(!File.Exists(Path.Combine(videoDestination, "Video cancelled [CCCCCCCCCCC].mp4")),
+                        "cancelling a video leaves no published output");
                     DownloadFiles.CleanupWorkingDirectory(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "work"),
                         Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "work", "CCCCCCCCCCC"));
                 }
@@ -155,6 +266,12 @@ namespace BareBonesDownloader
 
         private static void Add(DownloaderForm form, string links)
         {
+            AddKind(form, links, DownloadKind.Audio);
+        }
+        private static void AddKind(DownloaderForm form, string links, DownloadKind kind)
+        {
+            ((RadioButton)Get(form, "_audioRadio")).Checked = kind == DownloadKind.Audio;
+            ((RadioButton)Get(form, "_videoRadio")).Checked = kind == DownloadKind.Video;
             ((TextBox)Get(form, "_linksBox")).Text = links;
             Invoke(form, "OnAddToQueue");
         }
@@ -166,12 +283,20 @@ namespace BareBonesDownloader
         {
             return typeof(DownloaderForm).GetField(field, Private).GetValue(form);
         }
+        private static object Get(SettingsForm form, string field)
+        {
+            return typeof(SettingsForm).GetField(field, Private).GetValue(form);
+        }
+        private static void Invoke(SettingsForm form, string method)
+        {
+            typeof(SettingsForm).GetMethod(method, Private).Invoke(form, new object[] { null, EventArgs.Empty });
+        }
         private static void Set(DownloaderForm form, string field, object value)
         {
             typeof(DownloaderForm).GetField(field, Private).SetValue(form, value);
         }
         private static ListView Rows(DownloaderForm form) { return (ListView)Get(form, "_queueView"); }
-        private static string Status(DownloaderForm form, int index) { return Rows(form).Items[index].SubItems[1].Text; }
+        private static string Status(DownloaderForm form, int index) { return Rows(form).Items[index].SubItems[2].Text; }
         private static void WaitFor(DownloaderForm form, Func<bool> condition)
         {
             Stopwatch timer = Stopwatch.StartNew();

@@ -38,6 +38,18 @@ internal static class FakeDownloader
         if (Path.GetFileNameWithoutExtension(Environment.GetCommandLineArgs()[0]) == "ffprobe")
         {
             string basename = Path.GetFileName(args[args.Length - 1]);
+            if (basename.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase))
+            {
+                if (basename.IndexOf("MMMMMMMMMMM", StringComparison.Ordinal) >= 0)
+                    Console.WriteLine("{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"disposition\":{\"attached_pic\":0}}]}");
+                else if (basename.IndexOf("NNNNNNNNNNN", StringComparison.Ordinal) >= 0)
+                    Console.WriteLine("{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"disposition\":{\"attached_pic\":1}},{\"codec_type\":\"audio\",\"codec_name\":\"aac\",\"disposition\":{\"attached_pic\":0}}]}");
+                else if (basename.IndexOf("OOOOOOOOOOO", StringComparison.Ordinal) >= 0)
+                    Console.WriteLine("{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"vp9\",\"disposition\":{\"attached_pic\":0}},{\"codec_type\":\"audio\",\"codec_name\":\"opus\",\"disposition\":{\"attached_pic\":0}}]}");
+                else
+                    Console.WriteLine("{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"h264\",\"disposition\":{\"attached_pic\":0}},{\"codec_type\":\"audio\",\"codec_name\":\"aac\",\"disposition\":{\"attached_pic\":0}}]}");
+                return 0;
+            }
             if (basename == "Broken audio.opus")
             {
                 Console.WriteLine("{\"streams\":[]}");
@@ -63,6 +75,25 @@ internal static class FakeDownloader
         string url = args[args.Length - 1];
         Console.Error.WriteLine("ERROR-like diagnostic with \"quotes\" <bad> | and a NUL:\0");
         Console.WriteLine("BBD_FILE:C:\\invalid<path.opus");
+        if (Array.IndexOf(args, "--merge-output-format") >= 0)
+        {
+            string id = url.Substring(url.Length - 11);
+            string title = id == "BBBBBBBBBBB" ? "Video Regression" :
+                id == "CCCCCCCCCCC" ? "Video cancelled" :
+                id == "MMMMMMMMMMM" ? "Video missing audio" :
+                id == "NNNNNNNNNNN" ? "Video attached picture" : "Video wrong codec";
+            Directory.CreateDirectory(folder);
+            string video = Path.Combine(folder, title + " [" + id + "].mp4");
+            if (id == "CCCCCCCCCCC")
+            {
+                File.WriteAllText(Path.Combine(folder, title + " [" + id + "].part"), "partial video");
+                Thread.Sleep(30000);
+                return 1;
+            }
+            File.WriteAllText(video, "synthetic video with sound");
+            Console.WriteLine(PathRecord(video));
+            return 0;
+        }
         if (url.EndsWith("AAAAAAAAAAA"))
         {
             Console.Error.WriteLine("ERROR: [WinError 32] The process cannot access the file because it is being used by another process: 'C:\\Music\\X.opus' -> 'C:\\Music\\X.opus'");

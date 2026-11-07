@@ -22,8 +22,7 @@ namespace BareBonesDownloader
 
         private readonly object _sync = new object();
         private readonly LinkedList<QueueItem> _pending = new LinkedList<QueueItem>();
-        private readonly HashSet<string> _reservedVideoIds =
-            new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<string> _reservedVideoIds = new HashSet<string>(StringComparer.Ordinal);
         private readonly AutoResetEvent _wakeWorker = new AutoResetEvent(false);
         private readonly Thread _worker;
 
@@ -32,8 +31,13 @@ namespace BareBonesDownloader
         private TextBox _logBox;
         private Button _settingsButton;
         private Button _addButton;
+        private Button _changeDirectoryButton;
         private Button _cancelButton;
         private Button _clearWaitingButton;
+        private RadioButton _audioRadio;
+        private RadioButton _videoRadio;
+        private Label _destinationLabel;
+        private Label _modeHelpLabel;
         private ListView _queueView;
 
         private string _destinationPath;
@@ -41,7 +45,8 @@ namespace BareBonesDownloader
         private QueueItem _currentItem;
         private ProcessJob _currentJob;
         private bool _folderPaused;
-        private bool _folderPromptPending;
+        private string _blockedDestination;
+        private DownloadKind _blockedKind;
         private bool _shutdownRequested;
         private bool _allowClose;
         private volatile bool _closeAfterWorker;
@@ -49,7 +54,8 @@ namespace BareBonesDownloader
         public DownloaderForm()
         {
             _settings = AppSettings.Defaults();
-            Text = "Bare Bones Audio Downloader";
+            Text = "Bare Bones Downloader";
+            Icon = AppTheme.CreateApplicationIcon();
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(720, 520);
             Size = new Size(800, 590);
@@ -71,8 +77,9 @@ namespace BareBonesDownloader
             layout.Dock = DockStyle.Fill;
             layout.Padding = new Padding(8);
             layout.ColumnCount = 1;
-            layout.RowCount = 8;
+            layout.RowCount = 9;
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 76F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 92F));
@@ -82,26 +89,38 @@ namespace BareBonesDownloader
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 44F));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
 
+            GroupBox modeGroup = new GroupBox { Text = "Download as", Dock = DockStyle.Fill };
+            FlowLayoutPanel modeOptions = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 28, WrapContents = false };
+            _audioRadio = new RadioButton { Text = "Audio only", Checked = true, AutoSize = true, Margin = new Padding(8, 4, 24, 0), TabIndex = 0 };
+            _videoRadio = new RadioButton { Text = "Video + audio", AutoSize = true, Margin = new Padding(8, 4, 8, 0), TabIndex = 1 };
+            _audioRadio.CheckedChanged += ModeChanged;
+            _videoRadio.CheckedChanged += ModeChanged;
+            modeOptions.Controls.Add(_audioRadio);
+            modeOptions.Controls.Add(_videoRadio);
+            _modeHelpLabel = new Label { AutoSize = true, Dock = DockStyle.Bottom, Text = "Audio format from Settings." };
+            modeGroup.Controls.Add(_modeHelpLabel);
+            modeGroup.Controls.Add(modeOptions);
+            layout.Controls.Add(modeGroup, 0, 0);
+
             Panel destinationPanel = new Panel();
             destinationPanel.Dock = DockStyle.Fill;
-            Button changeDirectoryButton = new Button();
-            changeDirectoryButton.Text = "Change directory…";
-            changeDirectoryButton.Width = 142;
-            changeDirectoryButton.Dock = DockStyle.Right;
-            changeDirectoryButton.Click += OnChangeDirectory;
+            _changeDirectoryButton = new Button { Text = "Change…", Width = 115, Dock = DockStyle.Right, TabIndex = 3 };
+            _changeDirectoryButton.Click += OnChangeDirectory;
+            _destinationLabel = new Label { Dock = DockStyle.Left, Width = 100, TextAlign = ContentAlignment.MiddleLeft, TabStop = false };
             _destinationBox = new TextBox();
             _destinationBox.Dock = DockStyle.Fill;
             _destinationBox.ReadOnly = true;
             _destinationBox.TabStop = false;
-            destinationPanel.Controls.Add(changeDirectoryButton);
+            destinationPanel.Controls.Add(_changeDirectoryButton);
             destinationPanel.Controls.Add(_destinationBox);
-            layout.Controls.Add(destinationPanel, 0, 0);
+            destinationPanel.Controls.Add(_destinationLabel);
+            layout.Controls.Add(destinationPanel, 0, 1);
 
             Label linksLabel = new Label();
             linksLabel.Text = "YouTube links - one per line (whitespace also separates links)";
             linksLabel.Dock = DockStyle.Fill;
             linksLabel.TextAlign = ContentAlignment.MiddleLeft;
-            layout.Controls.Add(linksLabel, 0, 1);
+            layout.Controls.Add(linksLabel, 0, 2);
 
             _linksBox = new TextBox();
             _linksBox.Dock = DockStyle.Fill;
@@ -110,7 +129,8 @@ namespace BareBonesDownloader
             _linksBox.AcceptsTab = false;
             _linksBox.ScrollBars = ScrollBars.Vertical;
             _linksBox.WordWrap = false;
-            layout.Controls.Add(_linksBox, 0, 2);
+            _linksBox.TabIndex = 4;
+            layout.Controls.Add(_linksBox, 0, 3);
 
             FlowLayoutPanel buttons = new FlowLayoutPanel();
             buttons.Dock = DockStyle.Fill;
@@ -118,8 +138,9 @@ namespace BareBonesDownloader
             buttons.WrapContents = false;
             buttons.Padding = new Padding(0, 2, 0, 0);
             _addButton = new Button();
-            _addButton.Text = "Add to queue";
-            _addButton.Width = 112;
+            _addButton.Text = "Queue audio";
+            _addButton.Width = 124;
+            _addButton.TabIndex = 5;
             _addButton.Click += OnAddToQueue;
             _cancelButton = new Button();
             _cancelButton.Text = "Cancel current";
@@ -132,7 +153,9 @@ namespace BareBonesDownloader
             buttons.Controls.Add(_addButton);
             buttons.Controls.Add(_cancelButton);
             buttons.Controls.Add(_clearWaitingButton);
-            layout.Controls.Add(buttons, 0, 3);
+            _cancelButton.TabIndex = 6;
+            _clearWaitingButton.TabIndex = 7;
+            layout.Controls.Add(buttons, 0, 4);
 
             _queueView = new ListView();
             _queueView.Dock = DockStyle.Fill;
@@ -140,15 +163,16 @@ namespace BareBonesDownloader
             _queueView.FullRowSelect = true;
             _queueView.HideSelection = false;
             _queueView.MultiSelect = false;
-            _queueView.Columns.Add("YouTube video", 570);
+            _queueView.Columns.Add("YouTube video", 400);
+            _queueView.Columns.Add("Type", 120);
             _queueView.Columns.Add("Status", 110);
-            layout.Controls.Add(_queueView, 0, 4);
+            layout.Controls.Add(_queueView, 0, 5);
 
             Label logLabel = new Label();
             logLabel.Text = "Log";
             logLabel.Dock = DockStyle.Fill;
             logLabel.TextAlign = ContentAlignment.MiddleLeft;
-            layout.Controls.Add(logLabel, 0, 5);
+            layout.Controls.Add(logLabel, 0, 6);
 
             _logBox = new TextBox();
             _logBox.Dock = DockStyle.Fill;
@@ -157,7 +181,7 @@ namespace BareBonesDownloader
             _logBox.ScrollBars = ScrollBars.Vertical;
             _logBox.WordWrap = true;
             _logBox.MaxLength = MaximumLogCharacters;
-            layout.Controls.Add(_logBox, 0, 6);
+            layout.Controls.Add(_logBox, 0, 7);
 
             Panel settingsPanel = new Panel();
             settingsPanel.Dock = DockStyle.Fill;
@@ -165,9 +189,10 @@ namespace BareBonesDownloader
             _settingsButton.Text = "Settings…";
             _settingsButton.Width = 100;
             _settingsButton.Dock = DockStyle.Right;
+            _settingsButton.TabIndex = 8;
             _settingsButton.Click += OnSettings;
             settingsPanel.Controls.Add(_settingsButton);
-            layout.Controls.Add(settingsPanel, 0, 7);
+            layout.Controls.Add(settingsPanel, 0, 8);
 
             Controls.Add(layout);
         }
@@ -179,6 +204,7 @@ namespace BareBonesDownloader
             string loadedDestination = _settings.Destination;
             lock (_sync)
                 _destinationPath = loadedDestination;
+            AppTheme.Apply(this, _settings.Theme);
             RefreshDestinationBox();
 
             if (!String.IsNullOrEmpty(problem))
@@ -195,15 +221,7 @@ namespace BareBonesDownloader
             }
 
             if (String.IsNullOrEmpty(loadedDestination))
-            {
-                AppendLog("Choose an existing destination folder in Settings before adding downloads.");
-                ShowSettings();
-            }
-            else if (!Directory.Exists(loadedDestination))
-            {
-                PromptForDestination("The saved destination folder is no longer available.");
-            }
-
+                AppendLog("Choose an existing folder when you queue an audio or video download.");
             UpdateButtonStates();
         }
 
@@ -214,57 +232,148 @@ namespace BareBonesDownloader
 
         private void OnChangeDirectory(object sender, EventArgs e)
         {
-            string current;
-            lock (_sync) current = _destinationPath;
+            bool paused;
+            lock (_sync) paused = _folderPaused;
+            if (paused) RecoverBlockedFolder();
+            else ChooseDestination(SelectedKind(), false);
+        }
+
+        private void ModeChanged(object sender, EventArgs e)
+        {
+            if (_audioRadio == null || !_audioRadio.IsHandleCreated) return;
+            DownloadKind kind = SelectedKind();
+            lock (_sync) _destinationPath = SelectedDestination(_settings, kind);
+            RefreshDestinationBox();
+            UpdateModeControls();
+        }
+
+        private DownloadKind SelectedKind()
+        {
+            return _videoRadio != null && _videoRadio.Checked ? DownloadKind.Video : DownloadKind.Audio;
+        }
+
+        private static string SelectedDestination(AppSettings settings, DownloadKind kind)
+        {
+            return kind == DownloadKind.Video ? settings.VideoDestination : settings.Destination;
+        }
+
+        private static void SetDestination(AppSettings settings, DownloadKind kind, string destination)
+        {
+            if (kind == DownloadKind.Video) settings.VideoDestination = destination;
+            else settings.Destination = destination;
+        }
+
+        private static string KindLabel(DownloadKind kind)
+        {
+            return kind == DownloadKind.Video ? "Video + audio" : "Audio only";
+        }
+
+        private static string ReservationKey(string videoId, DownloadKind kind)
+        {
+            return ((int)kind).ToString() + ":" + videoId;
+        }
+
+        private void UpdateModeControls()
+        {
+            if (_modeHelpLabel == null) return;
+            bool paused;
+            DownloadKind blockedKind;
+            lock (_sync)
+            {
+                paused = _folderPaused;
+                blockedKind = _blockedKind;
+            }
+            _destinationLabel.Text = SelectedKind() == DownloadKind.Video ? "Video folder" : "Audio folder";
+            _addButton.Text = SelectedKind() == DownloadKind.Video ? "Queue video" : "Queue audio";
+            if (!paused)
+            {
+                _modeHelpLabel.Text = SelectedKind() == DownloadKind.Video
+                    ? "MP4 with sound · Video quality and size from Settings."
+                    : "Audio format and size from Settings.";
+            }
+            else
+            {
+                _modeHelpLabel.Text = KindLabel(blockedKind) + " folder needs attention. The queue is paused.";
+            }
+        }
+
+        private bool ChooseDestination(DownloadKind kind, bool recoverBlocked)
+        {
+            AppSettings current;
+            string currentPath;
+            lock (_sync)
+            {
+                current = _settings.Copy();
+                currentPath = recoverBlocked && _folderPaused && _blockedKind == kind
+                    ? _blockedDestination : SelectedDestination(current, kind);
+            }
 
             using (FolderBrowserDialog dialog = new FolderBrowserDialog())
             {
-                dialog.Description = "Choose an existing folder for downloaded audio.";
+                dialog.Description = kind == DownloadKind.Video
+                    ? "Choose an existing folder for videos."
+                    : "Choose an existing folder for downloaded audio.";
                 dialog.ShowNewFolderButton = false;
-                if (String.IsNullOrEmpty(current) || !Directory.Exists(current))
-                    current = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
-                if (!String.IsNullOrEmpty(current) && Directory.Exists(current))
-                    dialog.SelectedPath = current;
-                if (dialog.ShowDialog(this) != DialogResult.OK)
-                    return;
-
+                Environment.SpecialFolder fallback = kind == DownloadKind.Video
+                    ? Environment.SpecialFolder.MyVideos : Environment.SpecialFolder.MyMusic;
+                if (String.IsNullOrEmpty(currentPath) || !Directory.Exists(currentPath))
+                    currentPath = Environment.GetFolderPath(fallback);
+                if (!String.IsNullOrEmpty(currentPath) && Directory.Exists(currentPath))
+                    dialog.SelectedPath = currentPath;
+                if (dialog.ShowDialog(this) != DialogResult.OK) return false;
                 string selected = Path.GetFullPath(dialog.SelectedPath);
                 string problem;
                 if (!IsDestinationWritable(selected, out problem))
                 {
-                    MessageBox.Show(this, problem, "Destination unavailable",
-                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
+                    MessageBox.Show(this, problem, "Destination unavailable", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return false;
                 }
 
-                AppSettings updated;
-                lock (_sync)
-                {
-                    updated = _settings.Copy();
-                    updated.Destination = selected;
-                }
-                try
-                {
-                    SettingsStore.Save(updated);
-                }
+                SetDestination(current, kind, selected);
+                try { SettingsStore.Save(current); }
                 catch (Exception ex)
                 {
                     MessageBox.Show(this, "Could not save the destination setting. " + ex.Message,
                         "Settings could not be saved", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
+                    return false;
                 }
 
                 lock (_sync)
                 {
-                    _settings = updated;
-                    _destinationPath = selected;
-                    if (_folderPaused) _folderPaused = false;
+                    _settings = current;
+                    if (kind == SelectedKind()) _destinationPath = selected;
+                    if (recoverBlocked && _folderPaused && _blockedKind == kind &&
+                        !String.IsNullOrWhiteSpace(_blockedDestination))
+                    {
+                        foreach (QueueItem queued in _pending)
+                        {
+                            if (queued.Kind == kind && String.Equals(queued.Destination, _blockedDestination,
+                                StringComparison.OrdinalIgnoreCase))
+                                queued.Destination = selected;
+                        }
+                        _folderPaused = false;
+                        _blockedDestination = null;
+                    }
                 }
-                RefreshDestinationBox();
-                AppendLog("Destination changed.");
-                _wakeWorker.Set();
-                UpdateButtonStates();
             }
+
+            RefreshDestinationBox();
+            UpdateModeControls();
+            AppendLog(recoverBlocked ? "Folder updated. The queue resumed." : KindLabel(kind) + " folder changed.");
+            _wakeWorker.Set();
+            UpdateButtonStates();
+            return true;
+        }
+
+        private void RecoverBlockedFolder()
+        {
+            DownloadKind kind;
+            lock (_sync)
+            {
+                if (!_folderPaused || _shutdownRequested) return;
+                kind = _blockedKind;
+            }
+            ChooseDestination(kind, true);
         }
 
         private bool ShowSettings()
@@ -278,36 +387,24 @@ namespace BareBonesDownloader
                 lock (_sync)
                 {
                     _settings = updated.Copy();
-                    _destinationPath = updated.Destination;
-                    if (_folderPaused)
-                        _folderPaused = false;
+                    _destinationPath = SelectedDestination(updated, SelectedKind());
                 }
+                AppTheme.Apply(this, updated.Theme);
                 RefreshDestinationBox();
+                UpdateModeControls();
                 AppendLog("Settings saved.");
-                _wakeWorker.Set();
                 UpdateButtonStates();
                 return true;
             }
         }
 
-        private void PromptForDestination(string reason)
-        {
-            MessageBox.Show(this, reason + "\r\nChoose a different existing folder.",
-                "Choose destination", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            ShowSettings();
-        }
-
         private void OnAddToQueue(object sender, EventArgs e)
         {
-            string destination;
-            lock (_sync)
-                destination = _destinationPath;
-
-            if (String.IsNullOrEmpty(destination))
-            {
-                if (!ShowSettings())
-                    return;
-            }
+            DownloadKind kind = SelectedKind();
+            string destination = SelectedDestination(_settings, kind);
+            string folderProblem;
+            if (!IsDestinationWritable(destination, out folderProblem) && !ChooseDestination(kind, false)) return;
+            destination = SelectedDestination(_settings, kind);
 
             string missingTools;
             if (!TryGetMissingTools(out missingTools))
@@ -341,7 +438,8 @@ namespace BareBonesDownloader
                     QueueItem rejectedItem = new QueueItem();
                     rejectedItem.DisplayUrl = tokens[i];
                     rejectedItem.Status = "Failed";
-                    rejectedItem.Row = new ListViewItem(new string[] { tokens[i], "Failed" });
+                    rejectedItem.Kind = kind;
+                    rejectedItem.Row = new ListViewItem(new string[] { tokens[i], KindLabel(kind), "Failed" });
                     _queueView.Items.Add(rejectedItem.Row);
                     rejected.Add(tokens[i]);
                     AppendLog("Rejected link: " + tokens[i] + " - " + error);
@@ -353,20 +451,22 @@ namespace BareBonesDownloader
                 item.CanonicalUrl = video.CanonicalUrl;
                 item.DisplayUrl = video.CanonicalUrl;
                 item.Status = "Waiting";
+                item.Kind = kind;
                 lock (_sync)
                 {
                     item.Settings = _settings.Copy();
-                    if (String.IsNullOrWhiteSpace(item.Settings.Destination)) item.Settings.Destination = _destinationPath;
+                    item.Destination = destination;
                 }
-                item.Row = new ListViewItem(new string[] { item.DisplayUrl, item.Status });
+                item.Row = new ListViewItem(new string[] { item.DisplayUrl, KindLabel(kind), item.Status });
 
                 bool duplicate;
+                string reservation = ReservationKey(video.Id, kind);
                 lock (_sync)
                 {
-                    duplicate = _reservedVideoIds.Contains(video.Id);
+                    duplicate = _reservedVideoIds.Contains(reservation);
                     if (!duplicate && !_shutdownRequested)
                     {
-                        _reservedVideoIds.Add(video.Id);
+                        _reservedVideoIds.Add(reservation);
                         _pending.AddLast(item);
                     }
                     else if (_shutdownRequested)
@@ -378,7 +478,7 @@ namespace BareBonesDownloader
                 if (duplicate)
                 {
                     duplicates++;
-                    AppendLog("Ignored duplicate video ID " + video.Id +
+                    AppendLog("Ignored duplicate " + KindLabel(kind) + " video ID " + video.Id +
                         "; it is already waiting or downloading.");
                     continue;
                 }
@@ -390,7 +490,7 @@ namespace BareBonesDownloader
             _linksBox.Text = String.Join(Environment.NewLine, rejected.ToArray());
             if (added > 0)
             {
-                AppendLog("Added " + added.ToString() + " video(s) to the queue.");
+                AppendLog("Added " + added.ToString() + " " + KindLabel(kind).ToLowerInvariant() + " download(s) to the queue.");
                 _wakeWorker.Set();
             }
             else if (duplicates > 0)
@@ -439,10 +539,12 @@ namespace BareBonesDownloader
                 {
                     LinkedListNode<QueueItem> next = node.Next;
                     removed.Add(node.Value);
-                    _reservedVideoIds.Remove(node.Value.VideoId);
+                    _reservedVideoIds.Remove(ReservationKey(node.Value.VideoId, node.Value.Kind));
                     _pending.Remove(node);
                     node = next;
                 }
+                _folderPaused = false;
+                _blockedDestination = null;
             }
 
             int i;
@@ -492,7 +594,7 @@ namespace BareBonesDownloader
                         continue;
                     }
 
-                    string destination = item.Settings == null ? null : item.Settings.Destination;
+                    string destination = item.Destination;
 
                     string folderProblem;
                     if (!IsDestinationWritable(destination, out folderProblem))
@@ -503,11 +605,13 @@ namespace BareBonesDownloader
                             shuttingDown = _shutdownRequested;
                             _currentItem = null;
                             if (shuttingDown)
-                                _reservedVideoIds.Remove(item.VideoId);
+                                _reservedVideoIds.Remove(ReservationKey(item.VideoId, item.Kind));
                             else
                             {
                                 _pending.AddFirst(item);
                                 _folderPaused = true;
+                                _blockedKind = item.Kind;
+                                _blockedDestination = destination;
                             }
                         }
 
@@ -516,7 +620,8 @@ namespace BareBonesDownloader
                         else
                         {
                             AppendLog(folderProblem);
-                            RequestFolderPrompt(folderProblem);
+                            PostToUi(UpdateModeControls);
+                            AppendLog(KindLabel(item.Kind) + " folder is unavailable. The queue is paused. Choose a replacement folder to resume.");
                         }
                         PostToUi(UpdateButtonStates);
                         continue;
@@ -530,12 +635,12 @@ namespace BareBonesDownloader
                     lock (_sync)
                         cancelled = item.CancelRequested || _shutdownRequested;
 
-                    if (cancelled || outcome.Cancelled)
+                    if ((cancelled || outcome.Cancelled) && !outcome.Committed)
                         FinishItem(item, "Cancelled");
                     else
                     {
                         if (outcome.ExistingFileSkipped)
-                            AppendLog("An audio file with this name is already in the destination; it was left unchanged.");
+                            AppendLog("A file with this name is already in the destination; it was left unchanged. " + outcome.FinalPath);
                         if (outcome.Success)
                         {
                             if (!String.IsNullOrEmpty(outcome.ReplayGainErrorText))
@@ -576,7 +681,7 @@ namespace BareBonesDownloader
             {
                 if (_currentItem == item)
                     _currentItem = null;
-                _reservedVideoIds.Remove(item.VideoId);
+                _reservedVideoIds.Remove(ReservationKey(item.VideoId, item.Kind));
             }
             SetItemStatus(item, status);
             PostToUi(UpdateButtonStates);
@@ -624,15 +729,19 @@ namespace BareBonesDownloader
                 if (!Regex.IsMatch(item.VideoId, @"\A[A-Za-z0-9_-]{11}\z"))
                     throw new InvalidOperationException("The video ID is invalid.");
                 Directory.CreateDirectory(workRoot);
-                workLock = new FileStream(Path.Combine(workRoot, item.VideoId + ".lock"),
+                string workKey = WorkKey(item);
+                workLock = new FileStream(Path.Combine(workRoot, workKey + ".lock"),
                     FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-                workingDirectory = Path.Combine(workRoot, item.VideoId);
+                workingDirectory = Path.Combine(workRoot, workKey);
                 Directory.CreateDirectory(workingDirectory);
 
                 ProcessStartInfo startInfo = new ProcessStartInfo();
                 startInfo.FileName = downloader;
-                startInfo.Arguments = BuildDownloaderArguments(
-                    item.CanonicalUrl, workingDirectory, toolsDirectory, deno);
+                startInfo.Arguments = item.Kind == DownloadKind.Video
+                    ? BuildVideoDownloaderArguments(item.CanonicalUrl, workingDirectory, toolsDirectory, deno,
+                        item.VideoId, item.Settings.VideoMaxHeight, item.Settings.AppendYouTubeUrlToFilename)
+                    : BuildDownloaderArguments(item.CanonicalUrl, workingDirectory, toolsDirectory, deno,
+                        item.Settings.AppendYouTubeUrlToFilename);
                 startInfo.WorkingDirectory = appDirectory;
                 startInfo.UseShellExecute = false;
                 startInfo.CreateNoWindow = true;
@@ -731,7 +840,7 @@ namespace BareBonesDownloader
                     return outcome;
                 }
 
-                string finalPath = FindExistingAudioPath(output, workingDirectory);
+                string finalPath = FindExistingMediaPath(output, workingDirectory, item.Kind);
                 bool existingWorkingFileSkipped;
                 lock (output.Sync)
                     existingWorkingFileSkipped = output.ExistingFileSkipped;
@@ -742,25 +851,30 @@ namespace BareBonesDownloader
                         ? "yt-dlp skipped an existing file, but the resulting audio file could not be verified."
                         : output.LiveVideoFiltered
                             ? "This video is currently live. Live stream recording is not supported."
-                            : "yt-dlp completed but did not report an audio file in the working folder.";
+                        : "yt-dlp completed but did not report a " +
+                            (item.Kind == DownloadKind.Video ? "video file in the working folder." : "audio file in the working folder.");
                     return outcome;
                 }
 
-                finalPath = AudioEncoding.Apply(finalPath, toolsDirectory, item.Settings, job,
-                    delegate { return ShouldStop(item); });
-                MusicMetadata.ValidateAudio(finalPath, toolsDirectory, job,
-                    delegate { return ShouldStop(item); });
-                try
+                if (item.Kind == DownloadKind.Audio)
                 {
-                    string infoFile = MusicMetadata.FindInfoFile(workingDirectory, item.VideoId);
-                    MusicMetadata.EnsureTags(finalPath, infoFile, toolsDirectory, item.Settings, job,
-                        delegate { return ShouldStop(item); }, AppendLog);
+                    finalPath = AudioEncoding.Apply(finalPath, toolsDirectory, item.Settings, job,
+                        delegate { return ShouldStop(item); });
+                    MusicMetadata.ValidateAudio(finalPath, toolsDirectory, job,
+                        delegate { return ShouldStop(item); });
+                    try
+                    {
+                        string infoFile = MusicMetadata.FindInfoFile(workingDirectory, item.VideoId);
+                        MusicMetadata.EnsureTags(finalPath, infoFile, toolsDirectory, item.Settings, job,
+                            delegate { return ShouldStop(item); }, AppendLog);
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        AppendLog("Metadata warning: " + ex.Message + " The audio will still be saved with its available tags.");
+                    }
                 }
-                catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    AppendLog("Metadata warning: " + ex.Message + " The audio will still be saved with its available tags.");
-                }
+                else VideoOutput.Validate(finalPath, ffprobe, job, delegate { return ShouldStop(item); });
 
                 string destinationFile = Path.Combine(destination, Path.GetFileName(finalPath));
                 if (File.Exists(destinationFile))
@@ -768,12 +882,13 @@ namespace BareBonesDownloader
                     outcome.Success = true;
                     outcome.ExistingFileSkipped = true;
                     outcome.FinalPath = destinationFile;
+                    outcome.Committed = true;
                     removeWorkingFiles = true;
                     return outcome;
                 }
                 bool replayGainCancelled = false;
                 string replayGainError = null;
-                if (item.Settings.ReplayGain && SupportsReplayGainPath(finalPath) &&
+                if (item.Kind == DownloadKind.Audio && item.Settings.ReplayGain && SupportsReplayGainPath(finalPath) &&
                     !RunReplayGain(item, finalPath, job, out replayGainCancelled, out replayGainError))
                 {
                     if (replayGainCancelled)
@@ -783,6 +898,19 @@ namespace BareBonesDownloader
                     }
                     outcome.ReplayGainErrorText = replayGainError;
                 }
+                if (item.Kind == DownloadKind.Audio && item.Settings.AudioMaxSizeMb > 0)
+                {
+                    finalPath = MediaSizeLimiter.ApplyAudio(finalPath, toolsDirectory, item.Settings,
+                        job, delegate { return ShouldStop(item); }, AppendLog);
+                    MusicMetadata.ValidateAudio(finalPath, toolsDirectory, job,
+                        delegate { return ShouldStop(item); });
+                }
+                else if (item.Kind == DownloadKind.Video && item.Settings.VideoMaxSizeMb > 0)
+                {
+                    finalPath = MediaSizeLimiter.ApplyVideo(finalPath, toolsDirectory,
+                        item.Settings.VideoMaxSizeMb, job, delegate { return ShouldStop(item); }, AppendLog);
+                    VideoOutput.Validate(finalPath, ffprobe, job, delegate { return ShouldStop(item); });
+                }
                 if (ShouldStop(item))
                 {
                     outcome.Cancelled = true;
@@ -790,10 +918,11 @@ namespace BareBonesDownloader
                 }
 
                 bool existingFile;
-                outcome.FinalPath = DownloadFiles.PublishAudio(finalPath, destination,
+                outcome.FinalPath = DownloadFiles.PublishCompletedFile(finalPath, destination,
                     delegate { return ShouldStop(item); }, out existingFile);
                 outcome.ExistingFileSkipped = existingFile;
                 outcome.Success = true;
+                outcome.Committed = true;
                 removeWorkingFiles = true;
                 return outcome;
             }
@@ -1046,21 +1175,14 @@ namespace BareBonesDownloader
 
         private static string FindExistingAudioPath(DownloaderOutputState output, string destination)
         {
+            return FindExistingMediaPath(output, destination, DownloadKind.Audio);
+        }
+
+        private static string FindExistingMediaPath(DownloaderOutputState output, string destination, DownloadKind kind)
+        {
             List<string> candidates;
             lock (output.Sync)
                 candidates = new List<string>(output.CandidatePaths);
-
-            string root;
-            try
-            {
-                root = Path.GetFullPath(destination).TrimEnd(
-                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
-                    Path.DirectorySeparatorChar;
-            }
-            catch
-            {
-                return null;
-            }
 
             int i;
             for (i = candidates.Count - 1; i >= 0; i--)
@@ -1068,9 +1190,12 @@ namespace BareBonesDownloader
                 try
                 {
                     string fullPath = Path.GetFullPath(CleanPrintedPath(candidates[i]));
-                    if (!fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase))
+                    if (!DownloadFiles.IsSafePathWithin(destination, fullPath))
                         continue;
-                    if (!AudioExtensions.Contains(Path.GetExtension(fullPath)))
+                    bool supported = kind == DownloadKind.Video
+                        ? String.Equals(Path.GetExtension(fullPath), ".mp4", StringComparison.OrdinalIgnoreCase)
+                        : AudioExtensions.Contains(Path.GetExtension(fullPath));
+                    if (!supported)
                         continue;
                     if (File.Exists(fullPath))
                         return fullPath;
@@ -1083,19 +1208,48 @@ namespace BareBonesDownloader
         private static string BuildDownloaderArguments(
             string canonicalUrl, string destination, string toolsDirectory, string denoPath)
         {
-            string[] values = new string[]
+            return BuildDownloaderArguments(canonicalUrl, destination, toolsDirectory, denoPath, false);
+        }
+
+        private static string BuildDownloaderArguments(
+            string canonicalUrl, string destination, string toolsDirectory, string denoPath,
+            bool appendYouTubeUrlToFilename)
+        {
+            return BuildDownloaderArgumentsForKind(canonicalUrl, destination, toolsDirectory, denoPath,
+                DownloadKind.Audio, null, 0, appendYouTubeUrlToFilename);
+        }
+
+        private static string BuildVideoDownloaderArguments(
+            string canonicalUrl, string destination, string toolsDirectory, string denoPath, string videoId)
+        {
+            return BuildVideoDownloaderArguments(canonicalUrl, destination, toolsDirectory, denoPath, videoId, 0, false);
+        }
+
+        private static string BuildVideoDownloaderArguments(
+            string canonicalUrl, string destination, string toolsDirectory, string denoPath, string videoId,
+            int maximumHeight)
+        {
+            return BuildVideoDownloaderArguments(canonicalUrl, destination, toolsDirectory, denoPath,
+                videoId, maximumHeight, false);
+        }
+
+        private static string BuildVideoDownloaderArguments(
+            string canonicalUrl, string destination, string toolsDirectory, string denoPath, string videoId,
+            int maximumHeight, bool appendYouTubeUrlToFilename)
+        {
+            return BuildDownloaderArgumentsForKind(canonicalUrl, destination, toolsDirectory, denoPath,
+                DownloadKind.Video, videoId, maximumHeight, appendYouTubeUrlToFilename);
+        }
+
+        private static string BuildDownloaderArgumentsForKind(
+            string canonicalUrl, string destination, string toolsDirectory, string denoPath,
+            DownloadKind kind, string videoId, int maximumHeight, bool appendYouTubeUrlToFilename)
+        {
+            List<string> values = new List<string>
             {
                 "--ignore-config",
                 "--encoding", "utf-8",
                 "--no-playlist",
-                "--format", "bestaudio/best",
-                "--extract-audio",
-                "--embed-metadata",
-                "--write-info-json",
-                "--no-write-playlist-metafiles",
-                "--no-embed-info-json",
-                "--audio-format", "best",
-                "--no-keep-video",
                 "--ffmpeg-location", toolsDirectory,
                 "--js-runtimes", "deno:" + denoPath,
                 "--match-filters", "!is_live",
@@ -1103,23 +1257,67 @@ namespace BareBonesDownloader
                 "--no-force-overwrites",
                 "--post-overwrites",
                 "--newline",
-                "--color", "never",
+                "--color", "never"
+            };
+            if (kind == DownloadKind.Audio)
+            {
+                values.AddRange(new string[]
+                {
+                    "--format", "bestaudio/best",
+                    "--extract-audio",
+                    "--embed-metadata",
+                    "--write-info-json",
+                    "--no-write-playlist-metafiles",
+                    "--no-embed-info-json",
+                    "--audio-format", "best",
+                    "--no-keep-video"
+                });
+            }
+            else
+            {
+                string heightFilter = maximumHeight > 0 ? "[height<=" + maximumHeight.ToString() + "]" : "";
+                values.AddRange(new string[]
+                {
+                    "--format",
+                    "bv[ext=mp4][vcodec^=avc1]" + heightFilter + "+ba[ext=m4a][acodec^=mp4a]/b[ext=mp4][vcodec^=avc1][acodec^=mp4a]" + heightFilter,
+                    "--merge-output-format", "mp4"
+                });
+            }
+            values.AddRange(new string[]
+            {
                 "--print", "after_move:" + FinalPathPrefix + "%(filepath)j",
                 "--paths", destination,
-                "--output", "%(title).150B.%(ext)s",
+                "--output", OutputTemplate(kind, appendYouTubeUrlToFilename),
                 "--",
                 canonicalUrl
-            };
+            });
 
             StringBuilder arguments = new StringBuilder();
             int i;
-            for (i = 0; i < values.Length; i++)
+            for (i = 0; i < values.Count; i++)
             {
                 if (i > 0)
                     arguments.Append(' ');
                 arguments.Append(QuoteWindowsArgument(values[i]));
             }
             return arguments.ToString();
+        }
+
+        private static string OutputTemplate(DownloadKind kind, bool appendYouTubeUrlToFilename)
+        {
+            if (appendYouTubeUrlToFilename)
+                return "%(title).110B [https___www.youtube.com_watch_v=%(id)s].%(ext)s";
+            return kind == DownloadKind.Video
+                ? "%(title).150B [%(id)s].%(ext)s" : "%(title).150B.%(ext)s";
+        }
+
+        private static string WorkKey(QueueItem item)
+        {
+            if (item.Kind == DownloadKind.Audio) return item.VideoId;
+            byte[] bytes = Encoding.ASCII.GetBytes(item.VideoId);
+            StringBuilder key = new StringBuilder("video-");
+            for (int i = 0; i < bytes.Length; i++) key.Append(bytes[i].ToString("x2"));
+            return key.ToString();
         }
 
         private static string QuoteWindowsArgument(string value)
@@ -1198,30 +1396,6 @@ namespace BareBonesDownloader
             }
         }
 
-        private void RequestFolderPrompt(string reason)
-        {
-            lock (_sync)
-            {
-                if (_folderPromptPending || _shutdownRequested)
-                    return;
-                _folderPromptPending = true;
-            }
-
-            PostToUi(delegate
-            {
-                lock (_sync)
-                    _folderPromptPending = false;
-                if (_shutdownRequested || IsDisposed)
-                    return;
-
-                MessageBox.Show(this, reason + "\r\nChoose a valid folder to resume the queue.",
-                    "Destination needed", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                if (!ShowSettings())
-                    AppendLog("The queue remains paused until a valid destination is chosen.");
-                UpdateButtonStates();
-            });
-        }
-
         private bool TryGetMissingTools(out string missing)
         {
             string tools = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tools");
@@ -1243,8 +1417,8 @@ namespace BareBonesDownloader
             PostToUi(delegate
             {
                 if (item.Row != null && item.Row.ListView == _queueView &&
-                    item.Row.SubItems.Count > 1)
-                    item.Row.SubItems[1].Text = status;
+                    item.Row.SubItems.Count > 2)
+                    item.Row.SubItems[2].Text = status;
                 UpdateButtonStates();
             });
         }
@@ -1255,17 +1429,22 @@ namespace BareBonesDownloader
                 return;
             string destination;
             lock (_sync)
+            {
+                _destinationPath = SelectedDestination(_settings, SelectedKind());
                 destination = _destinationPath;
+            }
+            _destinationLabel.Text = SelectedKind() == DownloadKind.Video ? "Video folder" : "Audio folder";
             _destinationBox.Text = String.IsNullOrEmpty(destination)
                 ? "(Choose an existing folder)" : destination;
         }
 
         private void ResizeQueueColumns()
         {
-            if (_queueView == null || _queueView.Columns.Count < 2)
+            if (_queueView == null || _queueView.Columns.Count < 3)
                 return;
-            _queueView.Columns[1].Width = 110;
-            _queueView.Columns[0].Width = Math.Max(250, _queueView.ClientSize.Width - 116);
+            _queueView.Columns[2].Width = 95;
+            _queueView.Columns[1].Width = 120;
+            _queueView.Columns[0].Width = Math.Max(250, _queueView.ClientSize.Width - 220);
         }
 
         private void UpdateButtonStates()
@@ -1289,6 +1468,9 @@ namespace BareBonesDownloader
             _addButton.Enabled = !shuttingDown;
             _cancelButton.Enabled = !shuttingDown && current;
             _clearWaitingButton.Enabled = !shuttingDown && waiting;
+            _changeDirectoryButton.Enabled = !shuttingDown;
+            _changeDirectoryButton.Text = paused ? "Choose replacement…" : "Change…";
+            UpdateModeControls();
         }
 
         private void AppendLog(string message)
@@ -1396,11 +1578,14 @@ namespace BareBonesDownloader
             public ListViewItem Row;
             public bool CancelRequested;
             public AppSettings Settings;
+            public DownloadKind Kind;
+            public string Destination;
         }
 
         private sealed class ProcessOutcome
         {
             public bool Success;
+            public bool Committed;
             public bool Cancelled;
             public bool ExistingFileSkipped;
             public string FinalPath;

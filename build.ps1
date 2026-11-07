@@ -34,6 +34,8 @@ $arguments = @(
     '/platform:anycpu',
     '/optimize+',
     ('/out:' + $output),
+    '/win32icon:assets\BareBonesDownloader.ico',
+    '/resource:assets\BareBonesDownloader.ico,BareBonesDownloader.AppIcon.ico',
     '/reference:System.Windows.Forms.dll',
     '/reference:System.Drawing.dll',
     '/reference:System.Runtime.Serialization.dll',
