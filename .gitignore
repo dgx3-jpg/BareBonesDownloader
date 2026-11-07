@@ -1,0 +1,18 @@
+BareBonesDownloader.exe
+tools/*
+!tools/.gitkeep
+.setup-staging-*
+*.zip
+*.sha256
+work/
+backups/
+# Local agent and IDE files
+.agents/
+**/.agents/
+.codex/
+**/.codex/
+AGENTS.md
+**/AGENTS.md
+.vs/
+bin/
+obj/
